@@ -35,11 +35,34 @@ import {
 async function createCachedNuGetConfigFile(
   nugetCacheDir: string,
   packageFileName: string,
+  additionalRegistryUrls: string[] = [],
 ): Promise<string> {
-  const registries =
+  const configuredRegistries =
     (await getConfiguredRegistries(packageFileName)) ?? getDefaultRegistries();
 
-  const contents = createNuGetConfigXml(registries);
+  // Combine configured/default registries with any additional registry URLs,
+  // deduplicating by URL. additionalRegistryUrls are just URLs (strings),
+  // so convert them to Registry-like objects when adding.
+  const urlSet = new Set<string>();
+  const combinedRegistries = [];
+
+  for (const r of configuredRegistries) {
+    if (r?.url && !urlSet.has(r.url)) {
+      urlSet.add(r.url);
+      combinedRegistries.push(r);
+    }
+  }
+
+  for (const url of additionalRegistryUrls ?? []) {
+    if (!url) continue;
+    if (!urlSet.has(url)) {
+      urlSet.add(url);
+      // Minimal Registry-like object with just the url property.
+      combinedRegistries.push({ url });
+    }
+  }
+
+  const contents = createNuGetConfigXml(combinedRegistries);
 
   const cachedNugetConfigFile = upath.join(nugetCacheDir, `nuget.config`);
   await ensureDir(nugetCacheDir);
@@ -52,12 +75,14 @@ async function runDotnetRestore(
   packageFileName: string,
   dependentPackageFileNames: string[],
   config: UpdateArtifactsConfig,
+  additionalRegistryUrls: string[] = [],
 ): Promise<void> {
   const nugetCacheDir = upath.join(privateCacheDir(), 'nuget');
 
   const nugetConfigFile = await createCachedNuGetConfigFile(
     nugetCacheDir,
     packageFileName,
+    additionalRegistryUrls,
   );
 
   const dotnetVersion =
@@ -97,6 +122,11 @@ export async function updateArtifacts({
   updatedDeps,
 }: UpdateArtifact): Promise<UpdateArtifactsResult[] | null> {
   logger.debug(`nuget.updateArtifacts(${packageFileName})`);
+
+  // Collect and deduplicate registry URLs extracted from updatedDeps.
+  const combinedRegistryUrls: string[] = Array.from(
+    new Set((updatedDeps ?? []).flatMap((d) => d.registryUrls ?? [])),
+  );
 
   // https://github.com/NuGet/Home/wiki/Centrally-managing-NuGet-package-versions
   // https://github.com/microsoft/MSBuildSdks/tree/main/src/CentralPackageVersions
@@ -163,7 +193,14 @@ export async function updateArtifacts({
 
     await writeLocalFile(packageFileName, newPackageFileContent);
 
-    await runDotnetRestore(packageFileName, packageFiles, config);
+    // Pass combinedRegistryUrls so the generated nuget.config includes both
+    // configured/default registries and the extracted registry URLs.
+    await runDotnetRestore(
+      packageFileName,
+      packageFiles,
+      config,
+      combinedRegistryUrls,
+    );
 
     const newLockFileContentMap = await getLocalFiles(lockFileNames);
 
@@ -203,3 +240,4 @@ export async function updateArtifacts({
     ];
   }
 }
+```

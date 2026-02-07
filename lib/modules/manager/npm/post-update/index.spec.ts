@@ -8,6 +8,7 @@ import type { PostUpdateConfig } from '../../types.ts';
 import {
   determineLockFileDirs,
   getAdditionalFiles,
+  getRegistryUrlNpmrcLines,
   updateYarnBinary,
   writeExistingFiles,
   writeUpdatedPackageFiles,
@@ -148,6 +149,94 @@ describe('modules/manager/npm/post-update/index', () => {
 
     // reset mocked version
     fs.getParentDir.mockImplementation((p) => upath.parse(p).dir);
+  });
+
+  describe('getRegistryUrlNpmrcLines()', () => {
+    it('returns empty array for upgrades without registryUrls', () => {
+      expect(
+        getRegistryUrlNpmrcLines([
+          { depName: 'lodash' },
+          { depName: '@org/pkg' },
+        ]),
+      ).toEqual([]);
+    });
+
+    it('returns scoped registry lines for scoped packages', () => {
+      expect(
+        getRegistryUrlNpmrcLines([
+          {
+            depName: '@myorg/my-package',
+            registryUrls: ['https://npm.pkg.github.com/'],
+          },
+        ]),
+      ).toEqual(['@myorg:registry=https://npm.pkg.github.com/']);
+    });
+
+    it('deduplicates entries for same scope and registry', () => {
+      expect(
+        getRegistryUrlNpmrcLines([
+          {
+            depName: '@myorg/package-a',
+            registryUrls: ['https://npm.pkg.github.com/'],
+          },
+          {
+            depName: '@myorg/package-b',
+            registryUrls: ['https://npm.pkg.github.com/'],
+          },
+        ]),
+      ).toEqual(['@myorg:registry=https://npm.pkg.github.com/']);
+    });
+
+    it('returns separate entries for different scopes', () => {
+      expect(
+        getRegistryUrlNpmrcLines([
+          {
+            depName: '@org-a/package',
+            registryUrls: ['https://registry-a.com/'],
+          },
+          {
+            depName: '@org-b/package',
+            registryUrls: ['https://registry-b.com/'],
+          },
+        ]),
+      ).toEqual([
+        '@org-a:registry=https://registry-a.com/',
+        '@org-b:registry=https://registry-b.com/',
+      ]);
+    });
+
+    it('ignores non-scoped packages', () => {
+      expect(
+        getRegistryUrlNpmrcLines([
+          {
+            depName: 'lodash',
+            registryUrls: ['https://private.registry.com/'],
+          },
+        ]),
+      ).toEqual([]);
+    });
+
+    it('ignores upgrades without depName', () => {
+      expect(
+        getRegistryUrlNpmrcLines([
+          { registryUrls: ['https://private.registry.com/'] },
+        ]),
+      ).toEqual([]);
+    });
+
+    it('uses first registry URL when multiple are provided', () => {
+      expect(
+        getRegistryUrlNpmrcLines([
+          {
+            depName: '@myorg/pkg',
+            registryUrls: [
+              'https://primary.registry.com/',
+              'https://fallback.registry.com/',
+            ],
+          },
+        ]),
+      ).toEqual(['@myorg:registry=https://primary.registry.com/']);
+    });
   });
 
   describe('determineLockFileDirs()', () => {
@@ -426,6 +515,37 @@ describe('modules/manager/npm/post-update/index', () => {
         ['randomFolder/.npmrc'],
         ['packages/pnpm/.npmrc'],
       ]);
+    });
+
+    it('adds registry URLs from updatedDeps to npmrc for npm', async () => {
+      spyNpm.mockResolvedValueOnce({ error: false, lockFile: '{}' });
+      fs.readLocalFile.mockResolvedValue(null as never);
+      const configWithRegistries: PostUpdateConfig = {
+        ...baseConfig,
+        upgrades: [
+          {
+            depName: '@myorg/my-package',
+            isRemediation: true,
+            managerData: {
+              npmLock: 'package-lock.json',
+            },
+            registryUrls: ['https://npm.pkg.github.com/'],
+          },
+        ],
+        updatedPackageFiles: [
+          {
+            type: 'addition',
+            path: 'packages/core/package.json',
+            contents: '{}',
+          },
+        ],
+      };
+      await getAdditionalFiles(configWithRegistries, additionalFiles);
+
+      expect(fs.writeLocalFile).toHaveBeenCalledWith(
+        '.npmrc',
+        '@myorg:registry=https://npm.pkg.github.com/\n',
+      );
     });
 
     it('detects if lock file contents are unchanged(reuseExistingBranch=true)', async () => {

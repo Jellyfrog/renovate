@@ -1,7 +1,12 @@
 import { fs } from '~test/util.ts';
 import { GlobalConfig } from '../../../config/global.ts';
 import { logger } from '../../../logger/index.ts';
-import { resolveNpmrc } from './npmrc.ts';
+import type { Upgrade } from '../types.ts';
+import {
+  getRegistryNpmrcLines,
+  getRegistryYarnrcScopes,
+  resolveNpmrc,
+} from './npmrc.ts';
 
 vi.mock('../../../util/fs/index.ts');
 
@@ -200,6 +205,181 @@ describe('modules/manager/npm/npmrc', () => {
         npmrcFileName: '.npmrc',
       });
       GlobalConfig.reset();
+    });
+  });
+
+  describe('getRegistryNpmrcLines', () => {
+    it('returns empty array for empty upgrades', () => {
+      expect(getRegistryNpmrcLines([])).toEqual([]);
+    });
+
+    it('returns empty array for upgrades without registryUrls', () => {
+      const upgrades: Upgrade[] = [
+        { depName: '@scope/package' },
+        { depName: 'unscoped-package' },
+      ];
+      expect(getRegistryNpmrcLines(upgrades)).toEqual([]);
+    });
+
+    it('returns registry line for scoped package', () => {
+      const upgrades: Upgrade[] = [
+        {
+          depName: '@myorg/my-package',
+          registryUrls: ['https://npm.myorg.com/'],
+        },
+      ];
+      expect(getRegistryNpmrcLines(upgrades)).toEqual([
+        '@myorg:registry=https://npm.myorg.com/',
+      ]);
+    });
+
+    it('skips unscoped packages', () => {
+      const upgrades: Upgrade[] = [
+        {
+          depName: 'unscoped-package',
+          registryUrls: ['https://custom-registry.example.org/'],
+        },
+      ];
+      expect(getRegistryNpmrcLines(upgrades)).toEqual([]);
+    });
+
+    it('deduplicates scopes', () => {
+      const upgrades: Upgrade[] = [
+        {
+          depName: '@myorg/package-a',
+          registryUrls: ['https://npm.myorg.com/'],
+        },
+        {
+          depName: '@myorg/package-b',
+          registryUrls: ['https://npm.myorg.com/'],
+        },
+      ];
+      expect(getRegistryNpmrcLines(upgrades)).toEqual([
+        '@myorg:registry=https://npm.myorg.com/',
+      ]);
+    });
+
+    it('handles multiple scopes', () => {
+      const upgrades: Upgrade[] = [
+        {
+          depName: '@org-a/package',
+          registryUrls: ['https://registry-a.example.org/'],
+        },
+        {
+          depName: '@org-b/package',
+          registryUrls: ['https://registry-b.example.org/'],
+        },
+      ];
+      expect(getRegistryNpmrcLines(upgrades)).toEqual([
+        '@org-a:registry=https://registry-a.example.org/',
+        '@org-b:registry=https://registry-b.example.org/',
+      ]);
+    });
+
+    it('skips upgrades with empty registryUrls', () => {
+      const upgrades: Upgrade[] = [
+        { depName: '@scope/package', registryUrls: [] },
+        { depName: '@scope/package', registryUrls: null },
+      ];
+      expect(getRegistryNpmrcLines(upgrades)).toEqual([]);
+    });
+
+    it('skips upgrades with empty depName', () => {
+      const upgrades: Upgrade[] = [
+        { depName: '', registryUrls: ['https://registry.example.org/'] },
+      ];
+      expect(getRegistryNpmrcLines(upgrades)).toEqual([]);
+    });
+
+    it('uses first registry URL when multiple are provided', () => {
+      const upgrades: Upgrade[] = [
+        {
+          depName: '@scope/package',
+          registryUrls: [
+            'https://primary.example.org/',
+            'https://secondary.example.org/',
+          ],
+        },
+      ];
+      expect(getRegistryNpmrcLines(upgrades)).toEqual([
+        '@scope:registry=https://primary.example.org/',
+      ]);
+    });
+  });
+
+  describe('getRegistryYarnrcScopes', () => {
+    it('returns undefined for empty upgrades', () => {
+      expect(getRegistryYarnrcScopes([])).toBeUndefined();
+    });
+
+    it('returns undefined for upgrades without registryUrls', () => {
+      const upgrades: Upgrade[] = [{ depName: '@scope/package' }];
+      expect(getRegistryYarnrcScopes(upgrades)).toBeUndefined();
+    });
+
+    it('returns npmScopes for scoped package', () => {
+      const upgrades: Upgrade[] = [
+        {
+          depName: '@myorg/my-package',
+          registryUrls: ['https://npm.myorg.com/'],
+        },
+      ];
+      expect(getRegistryYarnrcScopes(upgrades)).toEqual({
+        npmScopes: {
+          myorg: { npmRegistryServer: 'https://npm.myorg.com/' },
+        },
+      });
+    });
+
+    it('skips unscoped packages', () => {
+      const upgrades: Upgrade[] = [
+        {
+          depName: 'unscoped-package',
+          registryUrls: ['https://custom-registry.example.org/'],
+        },
+      ];
+      expect(getRegistryYarnrcScopes(upgrades)).toBeUndefined();
+    });
+
+    it('deduplicates scopes', () => {
+      const upgrades: Upgrade[] = [
+        {
+          depName: '@myorg/package-a',
+          registryUrls: ['https://npm.myorg.com/'],
+        },
+        {
+          depName: '@myorg/package-b',
+          registryUrls: ['https://npm.myorg.com/'],
+        },
+      ];
+      expect(getRegistryYarnrcScopes(upgrades)).toEqual({
+        npmScopes: {
+          myorg: { npmRegistryServer: 'https://npm.myorg.com/' },
+        },
+      });
+    });
+
+    it('handles multiple scopes', () => {
+      const upgrades: Upgrade[] = [
+        {
+          depName: '@org-a/package',
+          registryUrls: ['https://registry-a.example.org/'],
+        },
+        {
+          depName: '@org-b/package',
+          registryUrls: ['https://registry-b.example.org/'],
+        },
+      ];
+      expect(getRegistryYarnrcScopes(upgrades)).toEqual({
+        npmScopes: {
+          'org-a': {
+            npmRegistryServer: 'https://registry-a.example.org/',
+          },
+          'org-b': {
+            npmRegistryServer: 'https://registry-b.example.org/',
+          },
+        },
+      });
     });
   });
 });

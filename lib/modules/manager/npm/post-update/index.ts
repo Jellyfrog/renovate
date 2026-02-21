@@ -27,6 +27,7 @@ import {
   YARN_GLOBAL_DIR,
 } from '../constants.ts';
 import { getZeroInstallPaths } from '../extract/yarn.ts';
+import { getRegistryNpmrcLines, getRegistryYarnrcScopes } from '../npmrc.ts';
 import type { NpmManagerData } from '../types.ts';
 import {
   composeLockFile,
@@ -434,12 +435,16 @@ export async function getAdditionalFiles(
   for (const npmLock of dirs.npmLockDirs) {
     const lockFileDir = upath.dirname(npmLock);
     const npmrcContent = await getNpmrcContent(lockFileDir);
-    await updateNpmrcContent(lockFileDir, npmrcContent, additionalNpmrcContent);
-    const fileName = upath.basename(npmLock);
-    logger.debug(`Generating ${fileName} for ${lockFileDir}`);
     const upgrades = config.upgrades.filter(
       (upgrade) => upgrade.managerData?.npmLock === npmLock,
     );
+    const registryLines = getRegistryNpmrcLines(upgrades);
+    await updateNpmrcContent(lockFileDir, npmrcContent, [
+      ...additionalNpmrcContent,
+      ...registryLines,
+    ]);
+    const fileName = upath.basename(npmLock);
+    logger.debug(`Generating ${fileName} for ${lockFileDir}`);
     const res = await npm.generateLockFile(
       lockFileDir,
       env,
@@ -496,10 +501,18 @@ export async function getAdditionalFiles(
   for (const yarnLock of dirs.yarnLockDirs) {
     const lockFileDir = upath.dirname(yarnLock);
     const npmrcContent = await getNpmrcContent(lockFileDir);
-    await updateNpmrcContent(lockFileDir, npmrcContent, additionalNpmrcContent);
+    const upgrades = config.upgrades.filter(
+      (upgrade) => upgrade.managerData?.yarnLock === yarnLock,
+    );
+    const registryLines = getRegistryNpmrcLines(upgrades);
+    await updateNpmrcContent(lockFileDir, npmrcContent, [
+      ...additionalNpmrcContent,
+      ...registryLines,
+    ]);
+    const registryScopes = getRegistryYarnrcScopes(upgrades);
     let yarnRcYmlFilename: string | undefined;
     let existingYarnrcYmlContent: string | undefined | null;
-    if (additionalYarnRcYml) {
+    if (additionalYarnRcYml || registryScopes) {
       yarnRcYmlFilename = getSiblingFileName(yarnLock, '.yarnrc.yml');
       existingYarnrcYmlContent = await readLocalFile(yarnRcYmlFilename, 'utf8');
       if (existingYarnrcYmlContent) {
@@ -509,13 +522,19 @@ export async function getAdditionalFiles(
             existingYarnrcYmlContent,
           );
 
-          const updatedYarnYrcYml = deepmerge(
-            existingYarnrRcYml,
-            yarn.fuzzyMatchAdditionalYarnrcYml(
-              additionalYarnRcYml,
-              existingYarnrRcYml,
-            ),
-          );
+          let updatedYarnYrcYml = existingYarnrRcYml;
+          if (additionalYarnRcYml) {
+            updatedYarnYrcYml = deepmerge(
+              updatedYarnYrcYml,
+              yarn.fuzzyMatchAdditionalYarnrcYml(
+                additionalYarnRcYml,
+                existingYarnrRcYml,
+              ),
+            );
+          }
+          if (registryScopes) {
+            updatedYarnYrcYml = deepmerge(updatedYarnYrcYml, registryScopes);
+          }
 
           await writeLocalFile(yarnRcYmlFilename, dump(updatedYarnYrcYml));
           logger.debug('Added authentication to .yarnrc.yml');
@@ -526,9 +545,6 @@ export async function getAdditionalFiles(
     }
     logger.debug(`Generating yarn.lock for ${lockFileDir}`);
     const lockFileName = upath.join(lockFileDir, 'yarn.lock');
-    const upgrades = config.upgrades.filter(
-      (upgrade) => upgrade.managerData?.yarnLock === yarnLock,
-    );
     const res = await yarn.generateLockFile(lockFileDir, env, config, upgrades);
     if (res.error) {
       /* v8 ignore next -- needs test */
@@ -598,11 +614,15 @@ export async function getAdditionalFiles(
   for (const pnpmShrinkwrap of dirs.pnpmShrinkwrapDirs) {
     const lockFileDir = upath.dirname(pnpmShrinkwrap);
     const npmrcContent = await getNpmrcContent(lockFileDir);
-    await updateNpmrcContent(lockFileDir, npmrcContent, additionalNpmrcContent);
-    logger.debug(`Generating pnpm-lock.yaml for ${lockFileDir}`);
     const upgrades = config.upgrades.filter(
       (upgrade) => upgrade.managerData?.pnpmShrinkwrap === pnpmShrinkwrap,
     );
+    const registryLines = getRegistryNpmrcLines(upgrades);
+    await updateNpmrcContent(lockFileDir, npmrcContent, [
+      ...additionalNpmrcContent,
+      ...registryLines,
+    ]);
+    logger.debug(`Generating pnpm-lock.yaml for ${lockFileDir}`);
     const res = await pnpm.generateLockFile(lockFileDir, env, config, upgrades);
     if (res.error) {
       /* v8 ignore next -- needs test */

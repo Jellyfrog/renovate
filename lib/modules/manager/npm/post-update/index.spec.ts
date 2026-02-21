@@ -428,6 +428,50 @@ describe('modules/manager/npm/post-update/index', () => {
       ]);
     });
 
+    it('passes registry URLs from upgrades to npmrc', async () => {
+      spyNpm.mockResolvedValueOnce({ error: false, lockFile: '{}' });
+      fs.readLocalFile.mockResolvedValue(null as never);
+      expect(
+        await getAdditionalFiles(
+          {
+            ...baseConfig,
+            upgrades: [
+              {
+                depName: '@myorg/my-package',
+                registryUrls: ['https://npm.myorg.com/'],
+                isRemediation: true,
+                managerData: {
+                  npmLock: 'package-lock.json',
+                },
+              },
+            ],
+            updatedPackageFiles: [
+              {
+                type: 'addition',
+                path: 'packages/core/package.json',
+                contents: '{}',
+              },
+            ],
+          },
+          additionalFiles,
+        ),
+      ).toStrictEqual({
+        artifactErrors: [],
+        updatedArtifacts: [
+          {
+            type: 'addition',
+            path: 'package-lock.json',
+            contents: '{}',
+          },
+        ],
+      });
+
+      expect(fs.writeLocalFile).toHaveBeenCalledWith(
+        '.npmrc',
+        '@myorg:registry=https://npm.myorg.com/\n',
+      );
+    });
+
     it('detects if lock file contents are unchanged(reuseExistingBranch=true)', async () => {
       spyNpm.mockResolvedValueOnce({ error: false, lockFile: '{}' });
       fs.readLocalFile.mockImplementation((f): Promise<any> => {
@@ -750,6 +794,40 @@ describe('modules/manager/npm/post-update/index', () => {
           'Error appending .yarnrc.yml content',
         );
       });
+    });
+
+    it('should merge npmScopes from upgrade registryUrls into .yarnrc.yml', async () => {
+      fs.getSiblingFileName.mockReturnValue('.yarnrc.yml');
+      fs.readLocalFile.mockImplementation((f): Promise<any> => {
+        if (f === '.yarnrc.yml') {
+          return Promise.resolve('nodeLinker: node-modules\n');
+        }
+        return Promise.resolve(null);
+      });
+
+      spyYarn.mockResolvedValueOnce({ error: false, lockFile: '{}' });
+      await getAdditionalFiles(
+        {
+          ...baseConfig,
+          upgrades: [
+            {
+              depName: '@myorg/my-package',
+              registryUrls: ['https://npm.myorg.com/'],
+              isLockfileUpdate: true,
+              managerData: {
+                yarnLock: 'yarn.lock',
+              },
+            },
+          ],
+          reuseExistingBranch: true,
+        },
+        additionalFiles,
+      );
+
+      expect(fs.writeLocalFile).toHaveBeenCalledWith(
+        '.yarnrc.yml',
+        'nodeLinker: node-modules\nnpmScopes:\n  myorg:\n    npmRegistryServer: https://npm.myorg.com/\n',
+      );
     });
   });
 });

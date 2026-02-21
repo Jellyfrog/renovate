@@ -1,4 +1,4 @@
-import { isString } from '@sindresorhus/is';
+import { isNonEmptyString, isString } from '@sindresorhus/is';
 import { GlobalConfig } from '../../../config/global.ts';
 import { logger } from '../../../logger/index.ts';
 import {
@@ -6,6 +6,7 @@ import {
   readLocalFile,
 } from '../../../util/fs/index.ts';
 import { newlineRegex, regEx } from '../../../util/regex.ts';
+import type { Upgrade } from '../types.ts';
 
 export interface NpmrcResult {
   npmrc: string | undefined;
@@ -58,4 +59,73 @@ export async function resolveNpmrc(
     npmrc = config.npmrc;
   }
   return { npmrc, npmrcFileName };
+}
+
+/**
+ * Extracts registry URLs from upgrades and converts them to .npmrc registry lines.
+ * Only scoped packages are supported, as npm doesn't support per-package registries
+ * for unscoped packages.
+ */
+export function getRegistryNpmrcLines(upgrades: Upgrade[]): string[] {
+  const seenScopes = new Set<string>();
+  const lines: string[] = [];
+
+  for (const upgrade of upgrades) {
+    const registryUrl = upgrade.registryUrls?.[0];
+    if (!isNonEmptyString(registryUrl) || !isNonEmptyString(upgrade.depName)) {
+      continue;
+    }
+
+    if (!upgrade.depName.startsWith('@')) {
+      continue;
+    }
+
+    const scope = upgrade.depName.split('/')[0];
+    if (seenScopes.has(scope)) {
+      continue;
+    }
+    seenScopes.add(scope);
+    lines.push(`${scope}:registry=${registryUrl}`);
+  }
+
+  return lines;
+}
+
+export interface YarnrcNpmScopes {
+  npmScopes: Record<string, { npmRegistryServer: string }>;
+}
+
+/**
+ * Extracts registry URLs from upgrades and converts them to .yarnrc.yml
+ * npmScopes entries for yarn v2+ (berry), which does not read scoped
+ * registries from .npmrc.
+ */
+export function getRegistryYarnrcScopes(
+  upgrades: Upgrade[],
+): YarnrcNpmScopes | undefined {
+  const scopes: Record<string, { npmRegistryServer: string }> = {};
+
+  for (const upgrade of upgrades) {
+    const registryUrl = upgrade.registryUrls?.[0];
+    if (!isNonEmptyString(registryUrl) || !isNonEmptyString(upgrade.depName)) {
+      continue;
+    }
+
+    if (!upgrade.depName.startsWith('@')) {
+      continue;
+    }
+
+    // Strip the leading '@' from the scope
+    const scope = upgrade.depName.split('/')[0].slice(1);
+    if (scope in scopes) {
+      continue;
+    }
+    scopes[scope] = { npmRegistryServer: registryUrl };
+  }
+
+  if (Object.keys(scopes).length === 0) {
+    return undefined;
+  }
+
+  return { npmScopes: scopes };
 }
